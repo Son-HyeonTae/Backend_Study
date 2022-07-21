@@ -1,0 +1,480 @@
+package server;
+
+import java.io.*;
+import java.util.*;
+import ocsf.server.*;
+import common.*;
+
+public class EchoServer extends AbstractServer {
+
+    final public static int DEFAULT_PORT = 5555;
+
+    static final String PASSWORDFILE = "~~~~~~~추가예정~~~~~~~~~";
+
+    static final int LINEBREAK = 10;
+    static final int RETURN = 13;
+    static final int SPACE = 32;
+
+    ChatIF serverUI;
+
+    String serverChannel = null;
+
+    Vector blockedUsers = new Vector();
+
+    private boolean closing = false;
+
+    public EchoServer(int port, ChatIF serverUI) throws IOException {
+        super(port);
+        this.serverUI = serverUI;
+        listen();
+    }
+
+    public void sendToAllClients(Object msg) {
+        Thread[] clients = getClientConnections();
+
+        for (int i = 0; i < clients.length; i++) {
+            ConnectionToClient c = (ConnectionToClient)(clients[i]);
+            
+            try {
+                if (((Boolean)(c.getInfo("passwordVerified"))).booleanValue())
+                    c.sendToClient(msg);
+            } catch (IOException e) {
+                serverUI.display("WARNING - Cannot send message to a client.");
+            }
+        }
+    }
+
+    public synchronized void handleMessageFromClient(Object msg, ConnectionToClient client) {
+        String command = (String)msg;
+
+        if (!blockedUsers.contains(((String)(client.getInfo("loginID"))))) {
+            if (serverChannel == null || serverChannel.equals(client.getInfo("channel"))) {
+                serverUI.display("Message: \"" + command + "\" from " + client.getInfo("loginID"));
+            }
+        }
+
+        if (((Boolean)(client.getInfo("passwordVerified"))).booleanValue()) {
+            if (command.startsWith("#whoison"))
+                sendListOfClients(client);
+
+            if (command.startsWith("#getchannel")) {
+                try {
+                    client.sendToClient("Currently on channel: " + client.getInfo("channel"));
+                } catch (IOExeption e) {
+                    serverUI.display("Warning: Error sending message.");
+                }
+            }
+
+            if (command.startsWith("#private"))
+                handleCmdPrivate(command, client);
+
+            if (command.startsWith("#channel"))
+                handleCmdChannel(command, client);
+
+            if (command.startsWith("#nochannel"))
+                handleCmdChannel("#channel main", client);
+
+            if (command.startsWith("#pub"))
+                handleCmdPub(command, client);
+
+            if (command.startsWith("#fwd"))
+                handleCmdFwd(command, client);
+
+            if (command.startsWith("#unfwd")) {
+                client.setInfo("fwdClient", "");
+
+                try {
+                    client.sendToClient("Messages will no longer be forwarded");
+                } catch (IOException e) {
+                    serverUI.display("Warning: Error sending message.");
+                }
+            }
+
+            if (command.startsWith("#block"))
+                handleCmdBlock(command, client);
+
+            if (command.startsWith("#unblick"))
+                handleCmdUnblock(command, client);
+
+            if (command.startsWith("whoiblock"))
+                handleCmdWhoiblock(client);
+            
+            if (command.startsWith("#whoblocksme"))
+                checkForBlocks((String)(client.getInfo("loginID")), client);
+
+            if (!command.startsWith("#")) {
+                sendChannelMessage(client.getInfo("loginID") + "> " + command,
+                    (String)client.getInfo("channel"),
+                    (String)(client.getInfo("loginID")));)
+            }
+        } else {
+            clientLoggingIn(command, client);
+        }
+    }
+
+    public synchronized void handleMessageFromServerUI(String message) {
+        if (message.startsWith("#quit"))
+            quit();
+
+        if (message.startsWith("#stop")) {
+            if (isListening()) {
+                stopListening();
+            } else {
+                serverUI.display("Cannot stop the server before it is restarted.");
+            }
+            return;
+        }
+
+        if (message.startsWith("#start")) {
+            closing = false;
+
+            if (!isListening()) {
+                try {
+                    listen();
+                    serverChannel = null;
+                } catch (IOException e) {
+                    serverUI.display("Cannot listen. Terminating server.");
+                    quit();
+                }
+            } else {
+                serverUI.display("Server is already running.");
+            }
+            return;
+        }
+
+        if (message.startsWith("#close")) {
+            sendToAllClients("Server is shutting down.");
+            sendToAllClients("You will be disconnected.");
+
+            closing = true;
+
+            try {
+                close();
+            } catch (IOException e) {
+                serverUI.display("Cannot close normally. Terminating server.");
+                quit();
+            }
+            return;
+        }
+
+        if (message.startsWith("#getport")) {
+            serverUI.display("Current port: " + getPort());
+            return;
+        }
+
+        if (message.startsWith("#setport")) {
+            if ((getNumberOfClients() != 0) || (isListening())) {
+                serverUI.display("Cannot change port while clients are connected or while server is listening.");
+            } else {
+                try {
+                    int port = 0;
+                    port = Integer.parseInt(message.substring(9));
+
+                    if ((port < 1024) || (port > 65535)) {
+                        setPort(5555);
+                        serverUI.display("Invalid port number. Port unchanged.");
+                    } else {
+                        setPort(port);
+                        serverUI.display("Port set to " + port);
+                    }
+                } catch (Exception e) {
+                    serverUI.display("Invalid use of the #setport command.");
+                    serverUI.display("Port unchanged.");
+                }
+            }
+            return;
+        }
+
+        if (message.startsWith("#whoison")) {
+            sendListOfClients(null);
+            return;
+        }
+
+        if (message.startsWith("#punt")) {
+            handleServerCmdPunt(message);
+            return;
+        }
+
+        if (message.startsWith("#warn")) {
+            handleServerCmdWarn(message);
+            return;
+        }
+
+        if (message.startsWith("#channel")) {
+            String oldChannel = serverChannel;
+
+            if (!(oldChannel == null)) {
+                sendChannelMessage("The server has left this channel.", serverChannel, "");
+            }
+
+            try {
+                serverChannel = message.substring(9);
+            } catch (StringIndexOutBoundsException e) {
+                serverchannel = null;
+                serverUI.display("Server will now receive all messages.");
+            }
+
+            if (serverChannel != null) {
+                sendChannelMessage("The server has joined this channel.", serverChannel, "");
+            }
+
+            serverUIdisplay("Now on channel: " + serverChannel);
+            return;
+        }
+
+        if (message.startsWith("#nochennel")) {
+            if (serverChannel != null) {
+                sendChannelMessage("Ther server has left this channel.", serverChannel, "");
+            }
+
+            serverChannel =null;
+            serverUI.display("Server will now receive all messages.");
+            return;
+        }
+
+        if (message.startsWith("#pub")) {
+            handleCmdPub(message, null);
+            return;
+        }
+
+        if (message.startsWith("#getchannel")) {
+            if (isListening() || getNumberOfClients() > 0)
+                serverUI.display("Currently on channel: " + serverChannel);
+            else
+                serverUI.display("Server has no active channels.");
+            return;
+        }
+
+        if (message.startsWith("#block")) {
+            handleServerCmdblock(message);
+            return;
+        }
+
+        if (message.startsWith("#unblock")) {
+            handleCmdUnblock(message, null);
+            return;
+        }
+
+        if (message.startsWith("#whoiblock")) {
+            handleCmdWhoiblock(null);
+            return;
+        }
+
+        if (message.startsWith("#private")) {
+            handleCmdPrivate(message, null);
+            return;
+        }
+
+        if (message.startsWith("#whoblocksme")) {
+            checkForBlocks("server", null);
+            return;
+        }
+
+        if (message.startsWith("#?") || message.startsWith("#help")) {
+            serverUI.display("\nServer-side command list:"
+            + "\n#block <loginID> -- Blocks all messages fromt the specified client."
+            + "\n#channel <channel> -- Connects to the specified channel."
+            + "\n#close -- Stops the server and disconnectst all users"
+            + "\n#get channel -- Gets the channel the server is currently connected"
+            + "\n#getport -- Gets the channel the server is currently connected"
+            + "\n#help OR #? -- Lists all commands and their use."
+            + "\n#nochannel -- Returns the server to the super- channel."
+            + "\n#private <loginID> <masg> -- Sends a private message to the specified client."
+            + "\n#pub -- Sends a public message."
+            + "\n#punt <loginID> -- Kicks client out of the chatroom."
+            + "\n#quit -- Terminates the server and disconnects all clients."
+            + "\n#setport <newport> -- Specify the port the server will listen on."
+            + "\n#start -- Makes the server restart accepting connections."
+            + "\n#stop -- Makes the server stop accepting new connections."
+            + "\n#unblock -- Unblock messages from all blocked clients."
+            + "\n#unblock <loginID> -- Unblock messages from the specified client."
+            + "\n#warn <loginID> -- Sends a warning message to the specified client."
+            + "\n#whoblockme -- List clients who are blocking messages from the server."
+            + "\n#whoiblock -- List all clients that the server is blocking messages from."
+            + "\n#whoison - Gets a list of all users and channel they are connected to..");
+        }
+
+        if (!(message.startsWith("#"))) {
+            serverUI.display("SERVER MESSAGE> " + message);
+            sendChannelMessage("SERVER MESSAGE> " + message, (serverChannel == null ? "main" : serverChannel), "server");
+        } else {
+            serverUI.display("Invalid command.");
+        }
+    }
+
+    public void quit() {
+        try {
+            closing = true;
+            sendToAllClients("Server is quitting.");
+            sendToAllClients("You will be disconnected.");
+            close();
+        } catch (IOException e) { }
+        System.exit(0);
+    }
+
+    protected void serverStarted() {
+        if (getNumberOfClients() != 0)
+            sendToAllClients("Server has restarted accepting connections.");
+
+            serverUI.display("Server listening for connections on port" + getPort());
+    }
+
+    protected void serverStopped() {
+        serverUI.display("Server has stopped listening for connections.");
+
+        if (!closing)
+            sendToAllClients("WARNING - Server has stopped accepting clients.");
+    }
+
+    protected void serverClosed() {
+        serverUI.display("Server is closed.");
+    }
+
+    protected void clientConnected(ConnectionToClient client) {
+        serverUI.display("A new client is attempting to connect to the server.");
+        client.setInfo("loginID", "");
+        client.setInfo("channel", "");
+        client.setInfo("passwordVerified", new Boolean(false));
+        client.setInfo("creatingNewAccount", new Boolean(false));
+        client.setInfo("fwdClient", "");
+        client.setInfo("blockedUsers", new Vector());
+
+        try {
+            client.sendToClient("Enter your login ID:");
+        } catch (IOException e) {
+            try {
+                client.close();
+            } catch (IOException ex) { }
+        }
+    }
+
+    protected synchronized void clientDisconnected(ConnectionToClient client) {
+        handleDisconnect(client);
+    }
+
+    synchronized protected void clientException(ConnectionToClient client, Throwable exception) {
+        handleDisconnect(client);
+    }
+
+    private void handleCmdWhoiblock(ConnectionToClient client) {
+        Vector blocked;
+
+        if (client != null) {
+            blocked = new Vector((Vector)(client.getInfo("BlockedUsers")));
+        } else {
+            blocked = new Vector(blockedUsers);
+        }
+
+        Iterator blockedIterator = blocked.iterator();
+
+        if (blockedIterator.hasNext()) {
+            sendToClientOrServer(client, "BLOCKED USERS:");
+
+            while (blockedIterator.hasNext()) {
+                String blockedUser = (String)blockedIterator.next();
+                sendToClientOrServer(client, "Message from " + blockedUser + " are blocked.");
+            }
+        } else {
+            sendToClientOrServer(client, "No blocking is in effect.");
+        }
+    }
+
+    private void handleCmdUnblock(string command, ConnectionToclient client) {
+        Vector blocked = null;
+        boolean removedUser = false;
+        String userToUnblock = null;
+
+        if (client != null) {
+            blocked = (Vector)(client.getInfo("blockedUsers"));
+        } else {
+            blocked = blockedUsers;
+        }
+
+        if (blocked.size() == 0) {
+            sendToClientOrServer(client, "No blocking is in effect.");
+            return;
+        }
+
+        try {
+            userToUnblock = command.substring(9);
+        } catch (StringIndexOutOfBoundsException e) {
+            userToUnblock = "";
+        }
+
+        if (userToUnblock.toLowerCase().equals("server"))
+            userToUnblock = "server";
+
+        Iterator blockedIterator = blocked.iterator();
+
+        while (blockedIterator.hasNext()) {
+            String blockedUser = (String) blockedIterator.next();
+
+            if (blockedUser.equals(userToUnblock) || userToUnblock.equals("")) {
+                blockedIterator.remove();
+                removedUser = true;
+                sendToClientOrServer(client, "Message from " + blockedUser + " will now be displayed.");
+            }
+        }
+
+        if (!removedUser) {
+            sendToClientOrServer(client, "Message from " + userToUnblock + " were not blocked.");
+        }
+    }
+
+    private void handleCmdBlock(String command, ConnectionToClient client) {
+        Vector addBlock = null;
+
+        try {
+            String userToBlock = command.substring(7);
+
+            if (userToBlock.toLowerCase().equals("server")) {
+                userToBlock = "server";
+            }
+
+            if (userToBlock.equals(client.getInfo("loginID"))) {
+                try {
+                    client.sendToClient("Cannot block the sending of messages to yourself.");
+                } catch (IOException ex) {
+                    serverUI.display("Warning: Error sending message.");
+                }
+                return;
+            } else {
+                if (isLoginUsed(userToBlock) || userToBlock.equals("server")) {
+                    if (isLoginBeingUsed(userToBlock, false) && !userToBlock.equals("server")) {
+                        ConnectionToClient toBlock = getClient(userToBlock);
+
+                        if (((String)(toBlock.getInfo("fwdCient"))).equals(((string)(client.getInfo("loginID"))))) {
+                            toBlock.setInfo("fwdClient", "");
+                        }
+
+                        try {
+                            toBlock.sendToclient("Forwarding to "
+                            + client.getInfo("loginID")
+                            + " has been cancelled because "
+                            + client.getInfo("loginID") + " is now blocking messages from you.");
+                            client.sendToClient("forwarding from "
+                            + toBlock.getInfo("loginID") + " to you has been terminated.");)
+                        } catch (IOException ioe) {
+                            serverUI.display("Warning: Error sending message.");
+                        }
+                    }
+                }
+                addBlock = (Vector)(client.getInfo("blockedUsers"));
+                addBlock = addElement(userToBlock);
+            } else {
+                try {
+                    client.sendToClient("User " + userToBlock + " does not exist.");
+                } catch (IOException ioe) {
+                    serverUI.display("Warning: Error sending message.");
+                }
+                return;
+            }
+
+            try {
+                client.sendToClient("Messages from " + userToBlock + " will be blocked.");
+            } catch (IOException ex) {
+                serverUI.display("Warning: Error sending message.");
+            }
+        }
+    }
+}

@@ -1,0 +1,1 @@
+package serverUIUtilities;// Added in Phase 6import server.*;public class ServerMenuPadAdapter implements java.awt.event.ActionListener {  EchoServer adaptee;  public ServerMenuPadAdapter(EchoServer adaptee)   {    this.adaptee = adaptee;  }  public void actionPerformed(java.awt.event.ActionEvent e)   {    adaptee.notifyObservers("#pad");  }}

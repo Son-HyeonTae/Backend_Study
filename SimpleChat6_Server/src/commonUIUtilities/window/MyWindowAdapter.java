@@ -1,0 +1,1 @@
+package commonUIUtilities.window;public class MyWindowAdapter extends java.awt.event.WindowAdapter{  public void windowClosing(java.awt.event.WindowEvent e)   {    System.exit(0);  }}

@@ -1,0 +1,1 @@
+package clientUIUtilities;// Added in Phase 6import client.*;public class ClientMenuPadAdapter implements java.awt.event.ActionListener {  ChatClient adaptee;  public ClientMenuPadAdapter(ChatClient adaptee)   {    this.adaptee = adaptee;  }  public void actionPerformed(java.awt.event.ActionEvent e)   {    adaptee.notifyObservers("#pad");  }}

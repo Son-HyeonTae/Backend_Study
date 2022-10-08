@@ -4,7 +4,7 @@
 
 Backend Developer Training and Practice Special Lecture, Kyonggi Univ.
 
-SimpleChat2 - just send text client to server
+SimpleChat2 - Client sends a text to server
 
 SimpleChat3 - Address function
 
